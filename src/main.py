@@ -62,14 +62,14 @@ def main():
             #                 '--net_resolution', '-1x176', 
             #                 '--video', os.path.join('..', args.video), 
             #                 '--write_json', output_path])
-            video_folders = glob.glob('JSON/bird_dog_jsons/*/')
+            video_folders = glob.glob('C:/Users/jquin/Desktop/BME_Capstone_Lumbly/JSON/bird_dog_jsons/*/')
             for folder in video_folders:
                 # Parse the pose JSON in the output path, and write it as a .npy file to the repository root folder.
-                parse_sequence(folder, 'bird_dog_npy')
+                parse_sequence(folder, 'C:/Users/jquin/Desktop/BME_Capstone_Lumbly/bird_dog_npy')
                 # Load the .npy pose sequence and evaluate the pose as the specified exercise.
                 vid_dir = folder.split("\\")[-2]
-                pose_seq = load_ps(f"bird_dog_npy/{vid_dir}.npy")
-                pkl_path = os.path.join("bird_dog_pkls", vid_dir)
+                pose_seq = load_ps(f"C:/Users/jquin/Desktop/BME_Capstone_Lumbly/bird_dog_npy/{vid_dir}.npy")
+                pkl_path = os.path.join("C:/Users/jquin/Desktop/BME_Capstone_Lumbly/bird_dog_pkls", vid_dir)
                 (correct, feedback) = evaluate_pose(pose_seq, args.exercise, pkl_path)
                 # if correct:
                 #     print('Exercise performed correctly!')

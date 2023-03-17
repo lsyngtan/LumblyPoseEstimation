@@ -22,8 +22,8 @@ PART_NAMES_COCO = [
 ]
 
 PART_NAMES_BODY_25 = [
-    "Nose",
-    "Neck",
+    "Nose",*
+    "Neck",*
     "RShoulder",
     "RElbow",
     "RWrist",
@@ -37,10 +37,10 @@ PART_NAMES_BODY_25 = [
     "LHip",
     "LKnee",
     "LAnkle",
-    "REye",
-    "LEye",
-    "REar",
-    "LEar",
+    "REye",*
+    "LEye",*
+    "REar",*
+    "LEar",*
     "LBigToe",
     "LSmallToe",
     "LHeel",

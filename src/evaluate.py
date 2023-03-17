@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 from scipy.signal import medfilt
 from datetime import datetime
+
 def evaluate_pose(pose_seq, exercise, pkl_path):
     """Evaluate a pose sequence for a particular exercise.
 
@@ -135,6 +136,22 @@ def _bird_dog(pose_seq, pkl_path):
     left_thigh_vecs = left_thigh_vecs / np.expand_dims(np.linalg.norm(left_thigh_vecs, axis=1), axis=1)
     left_shank_vecs = left_shank_vecs / np.expand_dims(np.linalg.norm(left_shank_vecs, axis=1), axis=1)
 
+
+    vector_dict = {       
+        "right_upper_arm_vecs": right_upper_arm_vecs,
+        "right_torso_vecs": right_torso_vecs,
+        "right_mid_torso_vecs": right_mid_torso_vecs,
+        "right_forearm_vecs": right_forearm_vecs,
+        "right_thigh_vecs": right_thigh_vecs, 
+        "right_shank_vecs": right_shank_vecs,
+        "left_upper_arm_vecs": left_upper_arm_vecs,
+        "left_torso_vecs": left_torso_vecs, 
+        "left_mid_torso_vecs": left_mid_torso_vecs,
+        "left_forearm_vecs": left_forearm_vecs,
+        "left_thigh_vecs": left_thigh_vecs,
+        "left_shank_vecs": left_shank_vecs  
+    }
+
     # mid_torso_vecs = mid_torso_vecs / np.expand_dims(np.linalg.norm(mid_torso_vecs, axis=1), axis=1)
 
     # calculate angles between body parts
@@ -169,6 +186,8 @@ def _bird_dog(pose_seq, pkl_path):
         pickle.dump(print_dict, f)
     with open(f"{pkl_path}_filtered.pkl", 'wb') as f:
         pickle.dump(filtered_dict, f)
+    with open(f"{pkl_path}_vectors.pkl", 'wb') as f:
+        pickle.dump(vector_dict, f)
 
     right_upper_arm_torso_angles_max = np.max(medfilt(medfilt(right_upper_arm_torso_angles, 5), 5))
     right_upper_arm_torso_angles_min = np.min(medfilt(medfilt(right_upper_arm_torso_angles, 5), 5))

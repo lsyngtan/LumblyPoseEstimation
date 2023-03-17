@@ -46,7 +46,7 @@ def parse_sequence(json_folder, output_folder, n_keypts = 25):
             all_keypoints[i] = keypoints.reshape((n_keypts, 3))
     json_folder = json_folder.split("\\")[-2]
     output_dir = os.path.join(output_folder, f"{json_folder}.npy")
-    # print(output_dir)
+    print(output_dir)
     np.save(output_dir, all_keypoints)
 
 
