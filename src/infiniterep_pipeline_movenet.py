@@ -227,7 +227,7 @@ def _bird_dog(pose_seq, pkl_path = None):
 
 def preprocess_pose(video_path):
   # Load keypoints from .pkl path
-  with open(f"/content/drive/MyDrive/462_Data/data_movenet/{video_path}", 'rb') as f:
+  with open(video_path, 'rb') as f:
     all_keypoints = pickle.load(f)
 
   # Calculate neck as average b/w L and R shoulders
@@ -349,8 +349,8 @@ def perform_segmentation(vector_dict, first_rep_idxs):
 
   return idxs
 
-FIRST_REP_IDXS = (130, 180)
-VID_PATH = 'deo2.gif.pkl'
+FIRST_REP_IDXS = (130, 180) # To replace w/ example rep
+VID_PATH = "/content/drive/MyDrive/462_Data/data_movenet/deo2.gif.pkl" # Replace w/ pkl file path
 
 def main():
   # Preprocess pose from .pkl path -> extract vectors and angles
