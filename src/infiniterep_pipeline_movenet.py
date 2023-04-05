@@ -1,31 +1,18 @@
-import os
 import pickle
-
 
 import numpy as np
 import pandas as pd
 pd.options.mode.chained_assignment = None  # default='warn'
 
-import matplotlib.pyplot as plt
 from scipy.signal import medfilt
 from scipy.interpolate import CubicSpline
 from scipy.stats import zscore
 from scipy.signal import find_peaks
 from scipy import ndimage
 
-from dtaidistance.subsequence.dtw import subsequence_alignment
-from dtaidistance import dtw_visualisation as dtwvis
-from dtaidistance.subsequence.dtw import subsequence_search
-from dtaidistance import dtw_ndim, dtw
-
-import librosa
 import libfmp.b
 import libfmp.c4
 import libfmp.c7
-
-# Some modules to display an animation using imageio.
-import imageio
-import cv2
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
@@ -33,7 +20,6 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 from sklearn.metrics import classification_report, confusion_matrix, balanced_accuracy_score, f1_score, accuracy_score
 from sklearn.preprocessing import StandardScaler
-from imblearn.over_sampling import SMOTE
 
 # Dictionary that maps from joint names to keypoint indices.
 KEYPOINT_DICT = {
@@ -343,19 +329,6 @@ def get_top_ranking_motion_ft(FRS, vector):
   coord = int(FRS.index[0][-1])
   print(key, coord)
   return key, vector[key][:, coord]
-
-def perform_subseq_dtw(exemplar_spline, query_spline, k = 10):
-  """
-  Extract matching "reps" using subsequence DTW
-  """
-  sa = subsequence_alignment(
-     zscore(exemplar_spline), 
-     zscore(query_spline)
-  )
-  matches = sa.kbest_matches(k)
-  idxs = [m.segment for m in matches]
-  
-  return idxs
 
 def get_metrics(idxs, gt_bounds_alt, TE):
   # Add a time error to each GT
