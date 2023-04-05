@@ -1,13 +1,17 @@
 import os
 import pickle
 
+
 import numpy as np
 import pandas as pd
 pd.options.mode.chained_assignment = None  # default='warn'
+
 import matplotlib.pyplot as plt
 from scipy.signal import medfilt
 from scipy.interpolate import CubicSpline
 from scipy.stats import zscore
+from scipy.signal import find_peaks
+from scipy import ndimage
 
 from dtaidistance.subsequence.dtw import subsequence_alignment
 from dtaidistance import dtw_visualisation as dtwvis
@@ -19,6 +23,81 @@ import libfmp.b
 import libfmp.c4
 import libfmp.c7
 
+# Some modules to display an animation using imageio.
+import imageio
+import cv2
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
+from sklearn.metrics import classification_report, confusion_matrix, balanced_accuracy_score, f1_score, accuracy_score
+from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
+
+# Dictionary that maps from joint names to keypoint indices.
+KEYPOINT_DICT = {
+    'nose': 0,
+    'left_eye': 1,
+    'right_eye': 2,
+    'left_ear': 3,
+    'right_ear': 4,
+    'left_shoulder': 5,
+    'right_shoulder': 6,
+    'left_elbow': 7,
+    'right_elbow': 8,
+    'left_wrist': 9,
+    'right_wrist': 10,
+    'left_hip': 11,
+    'right_hip': 12,
+    'left_knee': 13,
+    'right_knee': 14,
+    'left_ankle': 15,
+    'right_ankle': 16
+}
+
+# Maps bones to a matplotlib color name.
+KEYPOINT_EDGE_INDS_TO_COLOR = {
+    (0, 1): 'm',
+    (0, 2): 'c',
+    (1, 3): 'm',
+    (2, 4): 'c',
+    (0, 5): 'm',
+    (0, 6): 'c',
+    (5, 7): 'm',
+    (7, 9): 'm',
+    (6, 8): 'c',
+    (8, 10): 'c',
+    (5, 6): 'y',
+    (5, 11): 'm',
+    (6, 12): 'c',
+    (11, 12): 'y',
+    (11, 13): 'm',
+    (13, 15): 'm',
+    (12, 14): 'c',
+    (14, 16): 'c'
+}
+
+PART_NAMES = [
+    "nose",
+    "leye",
+    "reye",
+    "lear",
+    "rear",
+    "lshoulder",
+    "rshoulder",
+    "lelbow",
+    "relbow",
+    "lwrist",
+    "rwrist",
+    "lhip",
+    "rhip",
+    "lknee",
+    "rknee",
+    "lankle",
+    "rankle",
+    "neck"
+] 
 
 class PoseSequence:
   def __init__(self, sequence):
@@ -233,18 +312,9 @@ def preprocess_pose(all_keypoints):
   )
   # Convert to PoseSequence object and extract unit vectors + angles
   pose_seq = PoseSequence(all_keypoints)
-  vector_dict, angle_dict, filtered_dict = _bird_dog(pose_seq)
+  vector_dict, _, filtered_dict = _bird_dog(pose_seq)
 
-  return vector_dict, angle_dict, filtered_dict
-
-def extract_exemplar_and_query(exemplar_keypts, query_keypts):
-  """
-  Splits each video by rep count -> exemplar = first rep; queries = additional reps after this first rep
-  """
-  exemplar_vectors, _, _ = preprocess_pose(exemplar_keypts)
-  query_vectors, _, filtered_query_dict = preprocess_pose(query_keypts)
-
-  return exemplar_vectors, query_vectors, filtered_query_dict
+  return vector_dict, all_keypoints, filtered_dict
 
 # Eqn 1.
 def get_FR(feature):
@@ -306,44 +376,6 @@ def get_metrics(idxs, gt_bounds_alt, TE):
   fn = len([i for i in comparison_list if len(i) == 0])
 
   return {"TP": tp, "FP": fp, "FN": fn}
-
-def perform_segmentation(exemplar_keypts, query_keypts):
-  """
-  Segments repetitions using DTW:
-  exemplar_keypts: keypoints for exemplar video (sample rep taken during "calibration")
-  query_keypts: - keypoints for video we want to analyze (10 reps)
-  Ideally should be of the same person
-  """
-  # Extract exemplar as first rep, query as subsequent reps
-  exemplar_vector, query_vectors, filtered_query_dict = extract_exemplar_and_query(exemplar_keypts, query_keypts)
-  
-  # Calculate total change associated w/ each motion feature and rank
-  FRS = get_FRS(exemplar_vector)
-  FRS = FRS.sort_values(by = 'FR', ascending = False)
-
-  # Spline fitting
-  ft_name, exemplar_feature = get_top_ranking_motion_ft(FRS, exemplar_vector)
-  xs, exemplar_spline, dt = get_DTW_spline(exemplar_feature)
-  
-  ft_name, query_feature = get_top_ranking_motion_ft(FRS, query_vectors)
-  xs, query_spline, dt = get_DTW_spline(query_feature)
-
-  idxs = perform_subseq_dtw_alt(exemplar_spline, query_spline)
-
-  # Plot algorithmic segmentations
-  fig, ax = plt.subplots(figsize=(20, 8))
-  ax.plot(zscore(query_spline), label = 'Candidate Sequence', linestyle = ':')
-
-  for idx_set in idxs:
-    ax.axvline(idx_set[0], linestyle = '--', color = 'blue')
-    ax.axvline(idx_set[1], linestyle = '--', color = 'blue')
-    ax.axvspan(idx_set[0], idx_set[1], alpha = 0.5, color = 'red')
-  ax.plot(zscore(exemplar_spline), label = 'Exemplar Sequence', color = 'black')
-  ax.set_ylabel(f"{ft_name} Unit Vector")
-  ax.legend()
-  ax.set_title("Rep Segmentations using Subsequence DTW Video")
-
-  return idxs, filtered_query_dict
 
 def compute_matching_function_dtw(X, Y, stepsize=2):
     """Compute CENS features from file
@@ -459,71 +491,454 @@ def rename_angle_columns(rep_df, moving_limbs_dict):
       rename_dict[col] = f"stationary_{col_suffix}"
   return rename_dict
 
-RELEVANT_COLS = [
-    'moving_upper_arm_torso_angles',
-    'stationary_upper_arm_forearm_angles',
-    'moving_torso_thigh_angles',
-    'moving_upper_arm_forearm_angles',
-    'stationary_torso_thigh_angles',
-    'stationary_upper_arm_torso_angles',
-    'Rep',
-]
+def get_total_rom(motion_data):
+  return np.sum(np.abs(np.gradient(motion_data)))
 
-# Averaged across all reps in training data w/ that particular mistake
-SUPPORTING_ARM_THRESHES = (3.266140, 11.288011)
-LEG_TORSO_THRESH = 70.090967
+def get_total_moving_side(filtered_angle_dict):
+  sides = ['right', 'left']
+  right_arm_angles = filtered_angle_dict['right_upper_arm_torso_angles']
+  left_arm_angles = filtered_angle_dict['left_upper_arm_torso_angles']
+  right_arm_rom, left_arm_rom = get_total_rom(right_arm_angles), get_total_rom(left_arm_angles)
+  moving_arm = np.argmax([right_arm_rom, left_arm_rom])
 
-def load_data(exemplar_keypts, query_keypts):
+  right_leg_angles = filtered_angle_dict['right_torso_thigh_angles']
+  left_leg_angles = filtered_angle_dict['left_torso_thigh_angles']
+  right_leg_rom, left_leg_rom = get_total_rom(right_leg_angles), get_total_rom(left_leg_angles)
+  moving_leg = np.argmax([right_leg_rom, left_leg_rom])
+
+  moving_limb_dict = {
+      "moving_arm": sides[moving_arm], 
+      "moving_leg": sides[moving_leg]
+  }
+  print(moving_limb_dict) 
+
+  return moving_limb_dict 
+
+def _keypoints_and_edges_for_display(keypoints_with_scores,
+                                     height,
+                                     width,
+                                     keypoint_threshold=0.11):
+  """Returns high confidence keypoints and edges for visualization.
+
+  Args:
+    keypoints_with_scores: A numpy array with shape [1, 1, 17, 3] representing
+      the keypoint coordinates and scores returned from the MoveNet model.
+    height: height of the image in pixels.
+    width: width of the image in pixels.
+    keypoint_threshold: minimum confidence score for a keypoint to be
+      visualized.
+
+  Returns:
+    A (keypoints_xy, edges_xy, edge_colors) containing:
+      * the coordinates of all keypoints of all detected entities;
+      * the coordinates of all skeleton edges of all detected entities;
+      * the colors in which the edges should be plotted.
   """
-  Takes in exemplar + query keypoints from a video and outputs a dataframe 
-  containing angular features for all repetitions
+  keypoints_all = []
+  keypoint_edges_all = []
+  edge_colors = []
+  num_instances, _, _, _ = keypoints_with_scores.shape
+  for idx in range(num_instances):
+    kpts_x = keypoints_with_scores[0, idx, :, 1]
+    kpts_y = keypoints_with_scores[0, idx, :, 0]
+    kpts_scores = keypoints_with_scores[0, idx, :, 2]
+    kpts_absolute_xy = np.stack(
+        [width * np.array(kpts_x), height * np.array(kpts_y)], axis=-1)
+    kpts_above_thresh_absolute = kpts_absolute_xy[
+        kpts_scores > keypoint_threshold, :]
+    keypoints_all.append(kpts_above_thresh_absolute)
+
+    for edge_pair, color in KEYPOINT_EDGE_INDS_TO_COLOR.items():
+      if (kpts_scores[edge_pair[0]] > keypoint_threshold and
+          kpts_scores[edge_pair[1]] > keypoint_threshold):
+        x_start = kpts_absolute_xy[edge_pair[0], 0]
+        y_start = kpts_absolute_xy[edge_pair[0], 1]
+        x_end = kpts_absolute_xy[edge_pair[1], 0]
+        y_end = kpts_absolute_xy[edge_pair[1], 1]
+        line_seg = np.array([[x_start, y_start], [x_end, y_end]])
+        keypoint_edges_all.append(line_seg)
+        edge_colors.append(color)
+  if keypoints_all:
+    keypoints_xy = np.concatenate(keypoints_all, axis=0)
+  else:
+    keypoints_xy = np.zeros((0, 17, 2))
+
+  if keypoint_edges_all:
+    edges_xy = np.stack(keypoint_edges_all, axis=0)
+  else:
+    edges_xy = np.zeros((0, 2, 2))
+  return keypoints_xy, edges_xy, edge_colors
+
+def get_head_orientation(img_data, query_keypoints):
+  query_pt = int(len(img_data)/2)
+  height, width, channel = img_data[query_pt].shape
+
+  # Extract human interpretable coordinates
+  query_keypoints = np.expand_dims(
+      np.expand_dims(
+          query_keypoints[query_pt, :17, :], 
+          axis = 0
+      ), 
+      axis = 0
+  )
+  keypoint_locs, _ ,_ = _keypoints_and_edges_for_display(
+      query_keypoints, height, width
+  )
+  keypoint_interp_dict = dict(zip(PART_NAMES, keypoint_locs))
+  if keypoint_interp_dict['nose'][0] > keypoint_interp_dict['rankle'][0]:
+    return "right", keypoint_locs
+  else:
+    return "left", keypoint_locs
+
+# CHANGE BASED ON WHERE VIDEO PKLS ARE STORED
+def load_exemplar(video_path):
+  # Load keypoints from .pkl path
+  with open(f"/content/drive/MyDrive/462_Data/data_movenet/{video_path}.pkl", 'rb') as f:
+    exemplar_keypoints = pickle.load(f)
+
+  # Calculate neck as average b/w L and R shoulders
+  exemplar_keypoints = np.append(
+      exemplar_keypoints, 
+      ((exemplar_keypoints[:, 5, :] + exemplar_keypoints[:, 6, :])/2).reshape(-1, 1, 3), 
+      axis = 1
+  )
+  # Convert to PoseSequence object and extract unit vectors + angles
+  pose_seq = PoseSequence(exemplar_keypoints)
+  vector_dict, _, filtered_dict = _bird_dog(pose_seq)
+
+  return vector_dict, exemplar_keypoints, filtered_dict
+
+def perform_segmentation_updated(raw_keypoints, raw_img_data):
   """
-  data = []
-  # Segment reps 
-  idxs, filtered_dict = perform_segmentation(exemplar_keypts, query_keypts)
+  Segments repetitions using sDTW 
+  """
+  # Preprocess USER video
+  query_vectors, query_keypoints, filtered_angle_dict = preprocess_pose(raw_keypoints)
 
-  # Convert to dataframe
-  rep_df = construct_dataframe(idxs, filtered_dict)
+  # Detect moving side
+  moving_limb_dict = get_total_moving_side(filtered_angle_dict)
 
-  # Detect moving limbs
-  moving_limbs_df = detect_moving_limbs(rep_df)
+  # Detect head orientation
+  head_orientation, interp_keypts =  get_head_orientation(
+      raw_img_data, 
+      query_keypoints = query_keypoints
+  )
+  print("head_orientation:", head_orientation)
 
-  # Rename based on moving/stationary limbs
-  rename_dict = rename_angle_columns(rep_df, moving_limbs_df)
-  rep_df = rep_df.rename(columns = rename_dict)
+  # Select appropriate exemplar video
+  if moving_limb_dict['moving_arm'] == 'left' and moving_limb_dict['moving_leg'] == 'right' and head_orientation == 'right':
+    user_case = 'case_1'
+  elif moving_limb_dict['moving_arm'] == 'right' and moving_limb_dict['moving_leg'] == 'left' and head_orientation == 'right':
+    user_case = 'case_2'
+  elif moving_limb_dict['moving_arm'] == 'right' and moving_limb_dict['moving_leg'] == 'left' and head_orientation == 'left':
+    user_case = 'case_3'
+  elif moving_limb_dict['moving_arm'] == 'left' and moving_limb_dict['moving_leg'] == 'right' and head_orientation == 'left':
+    user_case = 'case_4'
+  else: 
+    print("Bird Dog form invalid; moving arm and leg are the same")
+    return
+
+  # CHANGE DEPENDING ON VIDEO_NAMES
+  exemplar_vid_dict = {
+      "case_1": "Video4", # moving arm left, moving leg right, head right
+      "case_2": "IMG_1587",# moving arm left, moving leg right, head right
+      "case_3": "IMG_1581",
+      "case_4": "IMG_1585"
+  }
+  exemplar_vector, _, _ = load_exemplar(f"{exemplar_vid_dict[user_case]}_trimmed")
+
+  # Calculate total change associated w/ each motion feature and rank
+  FRS = get_FRS(exemplar_vector)
+  FRS = FRS.sort_values(by = 'FR', ascending = False)
+
+  # Spline fitting
+  ft_name, exemplar_feature = get_top_ranking_motion_ft(FRS, exemplar_vector)
+  xs, exemplar_spline, dt = get_DTW_spline(exemplar_feature)
   
-  # Get relevant angular features
-  rep_df = rep_df[RELEVANT_COLS]
-  full_df = pd.concat(data)
+  ft_name, query_feature = get_top_ranking_motion_ft(FRS, query_vectors)
+  xs, query_spline, dt = get_DTW_spline(query_feature)
 
-  return full_df
+  # query_spline, exemplar_spline = ndimage.gaussian_filter1d(query_spline, 3), ndimage.gaussian_filter1d(exemplar_spline, 3)
+
+  idxs = perform_subseq_dtw_alt(exemplar_spline, query_spline)
+  idxs = sorted(idxs, key=lambda x: x[0])
+
+  return idxs, filtered_angle_dict, query_vectors, query_keypoints, moving_limb_dict
+
+def construct_dataframe(idxs, filtered_dict, offset = 0):
+  # Construct dataframe for correct reps
+  rep_df = pd.DataFrame(filtered_dict)
+
+  rep_dfs = []
+  for n_reps, idx_set in enumerate(idxs):
+    df = rep_df.iloc[idx_set[0]:idx_set[1], :]
+    df['Rep'] = n_reps + offset
+    rep_dfs.append(df)
+  rep_df = pd.concat(rep_dfs)
+
+  return rep_df
+  
+# Step 1: detect moving side
+def get_rom(rep_df, limb_keys):
+  roms_dict = {}
+  roms = [
+      rep_df.groupby('Rep').agg({f"right_{limb_keys}": np.ptp}).mean(),
+      rep_df.groupby('Rep').agg({f"left_{limb_keys}": np.ptp}).mean()
+  ]
+  for rom in roms:
+    roms_dict[rom.index.values[0]] =  rom.values[0]
+  
+  moving_limb = max(roms_dict, key=roms_dict.get)
+  moving_limb = moving_limb.split('_')[0]
+  
+  return moving_limb
+
+def detect_moving_limbs(rep_df, arm_keys = 'upper_arm_torso_angles', 
+                        leg_keys = 'torso_thigh_angles'):
+  moving_arm = get_rom(rep_df, limb_keys = arm_keys)
+  moving_leg = get_rom(rep_df, limb_keys = leg_keys)
+
+  moving_sides = {"moving_arm": moving_arm, "moving_leg": moving_leg}
+  print(moving_sides)
+  
+  return moving_sides
+
+def rename_angle_columns(rep_df, moving_limbs_dict):
+  rename_dict = {}
+  for col in rep_df.columns:
+    col_suffix = '_'.join(col.split('_')[1:])
+    # Rename arm columns
+    if "arm" in col.lower() and moving_limbs_dict['moving_arm'] in col.lower():
+      rename_dict[col] = f"moving_{col_suffix}"
+    elif "arm" in col.lower() and moving_limbs_dict['moving_arm'] not in col.lower():
+      rename_dict[col] = f"stationary_{col_suffix}"
+
+    # Rename leg columns
+    elif ("shank" in col.lower() or "thigh" in col.lower()) and moving_limbs_dict['moving_leg'] in col.lower():
+      rename_dict[col] = f"moving_{col_suffix}"
+    elif ("shank" in col.lower() or "thigh" in col.lower()) and moving_limbs_dict['moving_leg'] not in col.lower():
+      rename_dict[col] = f"stationary_{col_suffix}"
+  return rename_dict
+
+def load_data(train_vids, train_vids_metadata):
+  train_data, angle_dicts, vector_dicts, rep_idxs, moving_limbs, keypoints = [], [], [], [], [], []
+  for vid_num, (vid, vid_label) in enumerate(zip(train_vids, train_vids_metadata)):
+    idxs, filtered_angle_dict, vector_dict, query_keypoints = perform_segmentation_updated(query_vid_path = vid)
+    print(vid)
+
+    # Convert to dataframe
+    rep_df = construct_dataframe(idxs, filtered_angle_dict)
+
+    # Detect moving limbs
+    moving_limbs_df = detect_moving_limbs(rep_df)
+
+    # Rename based on moving/stationary limbs
+    rename_dict = rename_angle_columns(rep_df, moving_limbs_df)
+    rep_df = rep_df.rename(columns = rename_dict)
+
+    # # Increment 'Rep' indexes
+    # if vid_num > 0: 
+    #   rep_df['Rep'] = rep_df['Rep'].apply(lambda x: x + 10*vid_num)
+    
+    # Get relevant angular features
+    # rep_df = rep_df[relevant_cols]
+    rep_df['Label'] = vid_label
+    rep_df['Vid_Name'] = vid
+
+    # Assign 'labels' for each mistake
+    train_data.append(rep_df)
+    print()
+    angle_dicts.append(filtered_angle_dict)
+    vector_dicts.append(vector_dict)
+    moving_limbs.append(moving_limbs_df)
+    rep_idxs.append(idxs)
+    keypoints.append(query_keypoints)
+
+  # full_train_df = pd.concat(train_data)
+
+  return train_data, angle_dicts, vector_dicts, rep_idxs, moving_limbs, keypoints
+
+def extract_rep_dfs_and_keypts(img_data, angle_dict, vector_dict, 
+                               idxs, moving_limbs, query_keypoints):    
+  # Check that vectors and angles are aligned
+  vector_dict_lengths = [len(vector_dict[key]) for key in vector_dict.keys()]
+  angle_dict_lengths = [len(angle_dict[key]) for key in angle_dict.keys()]
+  assert np.unique(vector_dict_lengths).shape[0] == 1 and np.unique(angle_dict_lengths).shape[0] == 1 
+  assert np.unique(vector_dict_lengths)[0]  == np.unique(angle_dict_lengths)[0]
+
+  data = pd.Series(
+    zscore(
+        vector_dict[f"{moving_limbs['moving_leg']}_thigh_vecs"][:, 1]
+    )
+  )
+  held_rep_dfs, held_interpret_keypts, held_frame_idxs = [], [], []
+  for i in range(10):
+    # Extract vector data 
+    rep_data = data.iloc[idxs[i][0]:idxs[i][1]] 
+    
+    # Apply Gaussian filter to reduce noise
+    smoothed_rep_data = ndimage.gaussian_filter1d(rep_data, 3)
+    rep_data = pd.Series(smoothed_rep_data, index = rep_data.index)
+    
+    # Fit a quadratic to the data and determine whether we are looking for a trough or peak
+    model = np.poly1d(
+        np.polyfit(rep_data.index, rep_data.values, 2)
+    )
+    if model.coefficients[0] < 0: # Look for peaks (concave)
+      peaks = find_peaks(rep_data)[0]
+    else: # Look for a trough (convex)
+      peaks = find_peaks(-rep_data)[0]
+
+    # Find the highest peak or lowest trough
+    max_peak_idx = abs(rep_data)[rep_data.index[peaks]].idxmax()
+    relevant_frame = img_data[max_peak_idx]
+    print(max_peak_idx)
+
+    # Get body angles at the held frame
+    held_angle_df = pd.DataFrame(angle_dict).loc[max_peak_idx]
+
+    held_angle_df['Rep'] = i
+    held_angle_df = pd.DataFrame(held_angle_df).T
+
+    # Rename based on moving/stationary limbs
+    rename_dict = rename_angle_columns(held_angle_df, moving_limbs)
+    held_angle_df = held_angle_df.rename(columns = rename_dict)
+
+    # Get keypoints at "held" frame 
+    processed_keypoints = np.expand_dims(
+      np.expand_dims(
+          query_keypoints[max_peak_idx, :17, :], 
+          axis = 0
+      ), 
+      axis = 0
+    )
+    height, width, channel = relevant_frame.shape  
+    keypoint_locs, _ ,_ = _keypoints_and_edges_for_display(
+        processed_keypoints, 
+        height, 
+        width
+    )
+
+    held_rep_dfs.append(held_angle_df)
+    held_interpret_keypts.append(keypoint_locs)
+
+  return pd.concat(held_rep_dfs), held_interpret_keypts, held_frame_idxs
+
+# Feature Extaction functions
+def get_ankle_shoulder_diff(interpret_keypts, moving_limbs):
+  shoulder_ankle_diffs = []
+  for i in range(10):
+    moving_leg = moving_limbs['moving_leg']
+
+    moving_ankle_height = 1200 - interpret_keypts[i][KEYPOINT_DICT[f"{moving_leg}_ankle"]][1]
+
+    shoulder_sides = ['right', 'left']
+    right_shoulder_y = 1200 - interpret_keypts[i][KEYPOINT_DICT["right_shoulder"]][1]
+    left_shoulder_y = 1200 - interpret_keypts[i][KEYPOINT_DICT["left_shoulder"]][1]
+    higher_shoulder_idx = np.argmax([right_shoulder_y, left_shoulder_y])
+    higher_shoulder = np.max([right_shoulder_y, left_shoulder_y])
+
+    shoulder_ankle_diffs.append(
+      moving_ankle_height - higher_shoulder
+    )
+
+  return shoulder_ankle_diffs
+
+def get_wrist_shoulder_diff(interpret_keypts, moving_limbs):
+  shoulder_wrist_diffs = []
+  for i in range(10):
+    moving_arm = moving_limbs['moving_arm']
+    moving_wrist_height = 1200 - interpret_keypts[i][KEYPOINT_DICT[f"{moving_arm}_wrist"]][1]
+
+    shoulder_sides = ['right', 'left']
+    right_shoulder_y = 1200 - interpret_keypts[i][KEYPOINT_DICT["right_shoulder"]][1]
+    left_shoulder_y = 1200 - interpret_keypts[i][KEYPOINT_DICT["left_shoulder"]][1]
+    higher_shoulder_idx = np.argmax([right_shoulder_y, left_shoulder_y])
+    higher_shoulder = np.max([right_shoulder_y, left_shoulder_y])
+
+    shoulder_wrist_diffs.append(
+      moving_wrist_height - higher_shoulder
+    )
+  return shoulder_wrist_diffs
+
+def extract_features(full_held_rep_df, moving_limbs, interpret_keypts):                 
+  feature_vector = full_held_rep_df.copy()
+  # Extract shoulder ankle and shoulder-wrist differences
+  shoulder_ankle_diffs = get_ankle_shoulder_diff(
+      interpret_keypts = interpret_keypts, 
+      moving_limbs = moving_limbs
+  )
+  shoulder_wrist_diffs = get_wrist_shoulder_diff(
+      interpret_keypts = interpret_keypts, 
+      moving_limbs = moving_limbs
+  )
+  feature_vector['shoulder_ankle_diffs'] = shoulder_ankle_diffs
+  feature_vector['shoulder_wrist_diffs'] = shoulder_wrist_diffs
+
+  return feature_vector.set_index('Rep')
 
 # Output from MoveNet goes here:
-def main(exemplar_keypts, query_keypts):
+def main(movenet_keypts, movenet_imgs):
   mistakes = []
 
-  # Load in data from video
-  sample_df = load_data(exemplar_keypts, query_keypts)
+  # Loads the data from keypoints and image frames provided by MoveNet then performs rep segmentation
+  rep_idxs, filtered_angle_dict, query_vectors, query_keypoints, moving_limb_dict = perform_segmentation_updated(
+      movenet_keypts, 
+      movenet_imgs
+  )
+  # Extracts the held frames, keypoints, and body angles at the held frame for each rep  
+  held_rep_df, held_interpret_keypts, held_frames_idxs = extract_rep_dfs_and_keypts(
+      img_data = movenet_imgs, 
+      angle_dict = filtered_angle_dict, 
+      vector_dict = query_vectors, 
+      idxs = rep_idxs, 
+      moving_limbs = moving_limb_dict, 
+      query_keypoints = query_keypoints
+  )
+  # Extract feature vector
+  feature_vector = extract_features(held_rep_df, moving_limb_dict, held_interpret_keypts)
 
-  # Group by rep
-  sample_df_grouped = sample_df.groupby("Rep")
+  # CHANGE TO REFLECT WHERE MODELS AND SCALERS ARE STORED
+  with open('/content/drive/MyDrive/462_Data/models/leg_models/model.pkl', 'rb') as f:
+    leg_model = pickle.load(f)
+  with open('/content/drive/MyDrive/462_Data/models/leg_models/scaler.pkl', 'rb') as f:
+    leg_scaler = pickle.load(f)
 
-  # Check for bent supporting arm 
-  supporting_arm_df = sample_df_grouped.agg({
-   "stationary_upper_arm_forearm_angles": ['min', 'max']
-  }).mean()
-  supporting_min_angle = supporting_arm_df['stationary_upper_arm_forearm_angles']['min']
-  # supporting_max_angle = supporting_arm_df['stationary_upper_arm_forearm_angles']['max']
-  if supporting_min_angle >= SUPPORTING_ARM_THRESHES[1]:
-    mistakes.append("Supporting arm bent")
+  with open('/content/drive/MyDrive/462_Data/models/bent_arm_models/model.pkl', 'rb') as f:
+    bent_arm_model = pickle.load(f)
+  with open('/content/drive/MyDrive/462_Data/models/bent_arm_models/scaler.pkl', 'rb') as f:
+    bent_arm_scaler = pickle.load(f)
 
-  # Check for leg too high/low
-  torso_thigh_df = sample_df_grouped.agg({
-     "moving_torso_thigh_angles": np.ptp
-  }).mean()
-  thigh_rom = torso_thigh_df["moving_torso_thigh_angles"]["ptp"]
-  if thigh_rom < LEG_TORSO_THRESH:
-     mistakes.append("Leg too low")
-     
-  return mistakes
+  X_leg = feature_vector[['moving_torso_thigh_angles', 'moving_thigh_shank_angles', 'shoulder_ankle_diffs']]
+  X_bent_arm = feature_vector[['stationary_upper_arm_torso_angles', 'stationary_upper_arm_forearm_angles']]
 
+  X_leg_scaled = leg_scaler.transform(X_leg.values)
+  X_bent_arm_scaled = bent_arm_scaler.transform(X_bent_arm.values)
+
+  leg_preds = leg_model.predict(X_leg_scaled)
+  bent_arm_preds = bent_arm_model.predict(X_bent_arm_scaled)
+
+  mistake_frame_dict = {
+      "Extended leg too high": [],
+      "Extended leg too low": [],
+      "Bent supporting arm": []
+  }
+  if np.any(leg_preds == 1):
+    mistakes.append("Extended leg too high")
+    # Take first frame where error is detected
+    extended_leg_too_high_frame_idx = np.where(leg_preds == 1)[0][0]
+    mistake_frame_dict["Extended leg too high"] = movenet_imgs[held_frames_idxs[extended_leg_too_high_frame_idx]]
+
+  if np.any(leg_preds == 2):
+    mistakes.append("Extended leg too low")
+    # Take first frame where error is detected
+    extended_leg_too_low_frame_idx = np.where(leg_preds == 2)[0][0]
+    mistake_frame_dict["Extended leg too low"] = movenet_imgs[held_frames_idxs[extended_leg_too_low_frame_idx]]
+
+  if np.any(bent_arm_preds == 1):
+    mistakes.append("Bent supporting arm")
+    # Take first frame where error is detected
+    bent_arm_frame_idx = np.where(bent_arm_preds == 1)[0][0]
+    mistake_frame_dict["Bent supporting arm"] = movenet_imgs[held_frames_idxs[bent_arm_frame_idx]]
+
+  return mistakes, mistake_frame_dict
