@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 pd.options.mode.chained_assignment = None  # default='warn'
 
+import os
+
 from scipy.signal import medfilt
 from scipy.interpolate import CubicSpline
 from scipy.stats import zscore
@@ -20,6 +22,32 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 from sklearn.metrics import classification_report, confusion_matrix, balanced_accuracy_score, f1_score, accuracy_score
 from sklearn.preprocessing import StandardScaler
+
+from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+
+# create function to get pkl file from blob storage
+def get_pkl(blob_name, container_name):
+    account_name = os.environ["AccountName"]
+    account_key = os.environ["AccountKey"]
+    #create a client to interact with blob storage
+    connect_str = 'DefaultEndpointsProtocol=https;AccountName=' + account_name + ';AccountKey=' + account_key + ';EndpointSuffix=core.windows.net'
+    blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+
+    #use the client to connect to the container
+    container_client = blob_service_client.get_container_client(container_name)
+
+    # try finding blob with .pkl or .PKL extension
+    temp_blob_name = blob_name + '.pkl'
+    blob_client = container_client.get_blob_client(temp_blob_name)
+    if not blob_client.exists():
+      return ["blob does not exist", 404]
+    blob_name = temp_blob_name
+    # generate a StorageStreamDownloader object
+    blob_stream = blob_client.download_blob(0)
+    # get the blob content
+    blob_content = blob_stream.readall()      
+
+    return blob_content
 
 # Dictionary that maps from joint names to keypoint indices.
 KEYPOINT_DICT = {
@@ -564,10 +592,9 @@ def get_head_orientation(img_data, query_keypoints):
     return "left", keypoint_locs
 
 # CHANGE BASED ON WHERE VIDEO PKLS ARE STORED
-def load_exemplar(video_path):
+def load_exemplar(video_path, container_name):
   # Load keypoints from .pkl path
-  with open(f"/content/drive/MyDrive/462_Data/data_movenet/{video_path}.pkl", 'rb') as f:
-    exemplar_keypoints = pickle.load(f)
+  exemplar_keypoints = pickle.loads(get_pkl(video_path, container_name))
 
   # Calculate neck as average b/w L and R shoulders
   exemplar_keypoints = np.append(
@@ -581,10 +608,12 @@ def load_exemplar(video_path):
 
   return vector_dict, exemplar_keypoints, filtered_dict
 
-def perform_segmentation_updated(raw_keypoints, raw_img_data):
+def perform_segmentation_updated(raw_keypoints, raw_img_data, container_name, exercise_set, exercise_name):
   """
   Segments repetitions using sDTW 
   """
+
+  print(raw_img_data.shape)
   # Preprocess USER video
   query_vectors, query_keypoints, filtered_angle_dict = preprocess_pose(raw_keypoints)
 
@@ -613,12 +642,12 @@ def perform_segmentation_updated(raw_keypoints, raw_img_data):
 
   # CHANGE DEPENDING ON VIDEO_NAMES
   exemplar_vid_dict = {
-      "case_1": "Video4", # moving arm left, moving leg right, head right
-      "case_2": "IMG_1587",# moving arm left, moving leg right, head right
-      "case_3": "IMG_1581",
-      "case_4": "IMG_1585"
+      "case_1": "LRR", # moving arm left, moving leg right, head right
+      "case_2": "RLR", # moving arm right, moving leg left, head right
+      "case_3": "RLL", # moving arm right, moving leg left, head left
+      "case_4": "LRL"  # moving arm left, moving leg right, head left
   }
-  exemplar_vector, _, _ = load_exemplar(f"{exemplar_vid_dict[user_case]}_trimmed")
+  exemplar_vector, _, _ = load_exemplar("{}/{}/reference_videos/{}".format(exercise_set, exercise_name, exemplar_vid_dict[user_case]), container_name)
 
   # Calculate total change associated w/ each motion feature and rank
   FRS = get_FRS(exemplar_vector)
@@ -693,44 +722,6 @@ def rename_angle_columns(rep_df, moving_limbs_dict):
       rename_dict[col] = f"stationary_{col_suffix}"
   return rename_dict
 
-def load_data(train_vids, train_vids_metadata):
-  train_data, angle_dicts, vector_dicts, rep_idxs, moving_limbs, keypoints = [], [], [], [], [], []
-  for vid_num, (vid, vid_label) in enumerate(zip(train_vids, train_vids_metadata)):
-    idxs, filtered_angle_dict, vector_dict, query_keypoints = perform_segmentation_updated(query_vid_path = vid)
-    print(vid)
-
-    # Convert to dataframe
-    rep_df = construct_dataframe(idxs, filtered_angle_dict)
-
-    # Detect moving limbs
-    moving_limbs_df = detect_moving_limbs(rep_df)
-
-    # Rename based on moving/stationary limbs
-    rename_dict = rename_angle_columns(rep_df, moving_limbs_df)
-    rep_df = rep_df.rename(columns = rename_dict)
-
-    # # Increment 'Rep' indexes
-    # if vid_num > 0: 
-    #   rep_df['Rep'] = rep_df['Rep'].apply(lambda x: x + 10*vid_num)
-    
-    # Get relevant angular features
-    # rep_df = rep_df[relevant_cols]
-    rep_df['Label'] = vid_label
-    rep_df['Vid_Name'] = vid
-
-    # Assign 'labels' for each mistake
-    train_data.append(rep_df)
-    print()
-    angle_dicts.append(filtered_angle_dict)
-    vector_dicts.append(vector_dict)
-    moving_limbs.append(moving_limbs_df)
-    rep_idxs.append(idxs)
-    keypoints.append(query_keypoints)
-
-  # full_train_df = pd.concat(train_data)
-
-  return train_data, angle_dicts, vector_dicts, rep_idxs, moving_limbs, keypoints
-
 def extract_rep_dfs_and_keypts(img_data, angle_dict, vector_dict, 
                                idxs, moving_limbs, query_keypoints):    
   # Check that vectors and angles are aligned
@@ -794,6 +785,7 @@ def extract_rep_dfs_and_keypts(img_data, angle_dict, vector_dict,
 
     held_rep_dfs.append(held_angle_df)
     held_interpret_keypts.append(keypoint_locs)
+    held_frame_idxs.append(max_peak_idx)
 
   return pd.concat(held_rep_dfs), held_interpret_keypts, held_frame_idxs
 
@@ -851,13 +843,16 @@ def extract_features(full_held_rep_df, moving_limbs, interpret_keypts):
   return feature_vector.set_index('Rep')
 
 # Output from MoveNet goes here:
-def main(movenet_keypts, movenet_imgs):
+def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, container_name):
   mistakes = []
 
   # Loads the data from keypoints and image frames provided by MoveNet then performs rep segmentation
   rep_idxs, filtered_angle_dict, query_vectors, query_keypoints, moving_limb_dict = perform_segmentation_updated(
       movenet_keypts, 
-      movenet_imgs
+      movenet_imgs,
+      container_name,
+      exercise_set,
+      exercise_name
   )
   # Extracts the held frames, keypoints, and body angles at the held frame for each rep  
   held_rep_df, held_interpret_keypts, held_frames_idxs = extract_rep_dfs_and_keypts(
@@ -872,16 +867,11 @@ def main(movenet_keypts, movenet_imgs):
   feature_vector = extract_features(held_rep_df, moving_limb_dict, held_interpret_keypts)
 
   # CHANGE TO REFLECT WHERE MODELS AND SCALERS ARE STORED
-  with open('/content/drive/MyDrive/462_Data/models/leg_models/model.pkl', 'rb') as f:
-    leg_model = pickle.load(f)
-  with open('/content/drive/MyDrive/462_Data/models/leg_models/scaler.pkl', 'rb') as f:
-    leg_scaler = pickle.load(f)
-
-  with open('/content/drive/MyDrive/462_Data/models/bent_arm_models/model.pkl', 'rb') as f:
-    bent_arm_model = pickle.load(f)
-  with open('/content/drive/MyDrive/462_Data/models/bent_arm_models/scaler.pkl', 'rb') as f:
-    bent_arm_scaler = pickle.load(f)
-
+  leg_model = pickle.loads(get_pkl("{}/{}/models/leg_models/model".format(exercise_set, exercise_name), container_name))
+  leg_scaler = pickle.loads(get_pkl("{}/{}/models/leg_models/scaler".format(exercise_set, exercise_name), container_name))
+  bent_arm_model = pickle.loads(get_pkl("{}/{}/models/bent_arm_models/model".format(exercise_set, exercise_name), container_name))
+  bent_arm_scaler = pickle.loads(get_pkl("{}/{}/models/bent_arm_models/scaler".format(exercise_set, exercise_name), container_name))
+                    
   X_leg = feature_vector[['moving_torso_thigh_angles', 'moving_thigh_shank_angles', 'shoulder_ankle_diffs']]
   X_bent_arm = feature_vector[['stationary_upper_arm_torso_angles', 'stationary_upper_arm_forearm_angles']]
 
@@ -896,22 +886,27 @@ def main(movenet_keypts, movenet_imgs):
       "Extended leg too low": [],
       "Bent supporting arm": []
   }
+  print("leg preds: {}".format(leg_preds))
+  print("held_frames_idxs: {}".format(held_frames_idxs))
   if np.any(leg_preds == 1):
     mistakes.append("Extended leg too high")
     # Take first frame where error is detected
     extended_leg_too_high_frame_idx = np.where(leg_preds == 1)[0][0]
+    print("extended_leg_too_high_frame_idx: {}".format(extended_leg_too_high_frame_idx))
     mistake_frame_dict["Extended leg too high"] = movenet_imgs[held_frames_idxs[extended_leg_too_high_frame_idx]]
 
   if np.any(leg_preds == 2):
     mistakes.append("Extended leg too low")
     # Take first frame where error is detected
     extended_leg_too_low_frame_idx = np.where(leg_preds == 2)[0][0]
+    print("extended_leg_too_low_frame_idx: {}".format(extended_leg_too_low_frame_idx))
     mistake_frame_dict["Extended leg too low"] = movenet_imgs[held_frames_idxs[extended_leg_too_low_frame_idx]]
 
   if np.any(bent_arm_preds == 1):
     mistakes.append("Bent supporting arm")
     # Take first frame where error is detected
     bent_arm_frame_idx = np.where(bent_arm_preds == 1)[0][0]
+    print("bent_arm_frame_idx: {}".format(bent_arm_frame_idx))
     mistake_frame_dict["Bent supporting arm"] = movenet_imgs[held_frames_idxs[bent_arm_frame_idx]]
 
   return mistakes, mistake_frame_dict
