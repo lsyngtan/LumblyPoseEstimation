@@ -586,10 +586,13 @@ def get_head_orientation(img_data, query_keypoints):
       query_keypoints, height, width
   )
   keypoint_interp_dict = dict(zip(PART_NAMES, keypoint_locs))
-  if keypoint_interp_dict['nose'][0] > keypoint_interp_dict['rankle'][0]:
-    return "right", keypoint_locs
+  if 'rankle' in keypoint_interp_dict.keys() and 'nose' in keypoint_interp_dict.keys():
+    if keypoint_interp_dict['nose'][0] > keypoint_interp_dict['rankle'][0]:
+      return "right", keypoint_locs
+    else:
+      return "left", keypoint_locs
   else:
-    return "left", keypoint_locs
+    return "Not all keypoints detected", keypoint_locs
 
 # CHANGE BASED ON WHERE VIDEO PKLS ARE STORED
 def load_exemplar(video_path, container_name):
@@ -845,82 +848,80 @@ def extract_features(full_held_rep_df, moving_limbs, interpret_keypts):
 # Output from MoveNet goes here:
 def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, container_name):
   mistakes = []
+  mistake_frame_dict = {}
 
-  # Loads the data from keypoints and image frames provided by MoveNet then performs rep segmentation
-  rep_idxs, filtered_angle_dict, query_vectors, query_keypoints, moving_limb_dict = perform_segmentation_updated(
-      movenet_keypts, 
-      movenet_imgs,
-      container_name,
-      exercise_set,
-      exercise_name
-  )
-  # Extracts the held frames, keypoints, and body angles at the held frame for each rep  
-  held_rep_df, held_interpret_keypts, held_frames_idxs = extract_rep_dfs_and_keypts(
-      img_data = movenet_imgs, 
-      angle_dict = filtered_angle_dict, 
-      vector_dict = query_vectors, 
-      idxs = rep_idxs, 
-      moving_limbs = moving_limb_dict, 
-      query_keypoints = query_keypoints
-  )
-  # Extract feature vector
-  feature_vector = extract_features(held_rep_df, moving_limb_dict, held_interpret_keypts)
+  try:
+    # Loads the data from keypoints and image frames provided by MoveNet then performs rep segmentation
+    rep_idxs, filtered_angle_dict, query_vectors, query_keypoints, moving_limb_dict = perform_segmentation_updated(
+        movenet_keypts, 
+        movenet_imgs,
+        container_name,
+        exercise_set,
+        exercise_name
+    )
+    # Extracts the held frames, keypoints, and body angles at the held frame for each rep  
+    held_rep_df, held_interpret_keypts, held_frames_idxs = extract_rep_dfs_and_keypts(
+        img_data = movenet_imgs, 
+        angle_dict = filtered_angle_dict, 
+        vector_dict = query_vectors, 
+        idxs = rep_idxs, 
+        moving_limbs = moving_limb_dict, 
+        query_keypoints = query_keypoints
+    )
+    # Extract feature vector
+    feature_vector = extract_features(held_rep_df, moving_limb_dict, held_interpret_keypts)
 
-  # CHANGE TO REFLECT WHERE MODELS AND SCALERS ARE STORED
-  leg_model = pickle.loads(get_pkl("{}/{}/models/leg_models/model".format(exercise_set, exercise_name), container_name))
-  leg_scaler = pickle.loads(get_pkl("{}/{}/models/leg_models/scaler".format(exercise_set, exercise_name), container_name))
-  bent_arm_model = pickle.loads(get_pkl("{}/{}/models/bent_arm_models/model".format(exercise_set, exercise_name), container_name))
-  bent_arm_scaler = pickle.loads(get_pkl("{}/{}/models/bent_arm_models/scaler".format(exercise_set, exercise_name), container_name))
-  arm_model = pickle.loads(get_pkl("{}/{}/models/arm_models/model".format(exercise_set, exercise_name), container_name))
-  arm_scaler = pickle.loads(get_pkl("{}/{}/models/arm_models/scaler".format(exercise_set, exercise_name), container_name))
-                    
-  X_leg = feature_vector[['moving_torso_thigh_angles', 'moving_thigh_shank_angles', 'shoulder_ankle_diffs']]
-  X_bent_arm = feature_vector[['stationary_upper_arm_torso_angles', 'stationary_upper_arm_forearm_angles']]
-  X_arm = feature_vector[['moving_upper_arm_torso_angles', 'moving_upper_arm_forearm_angles', 'shoulder_wrist_diffs']]
+    # CHANGE TO REFLECT WHERE MODELS AND SCALERS ARE STORED
+    leg_model = pickle.loads(get_pkl("{}/{}/models/leg_models/model".format(exercise_set, exercise_name), container_name))
+    leg_scaler = pickle.loads(get_pkl("{}/{}/models/leg_models/scaler".format(exercise_set, exercise_name), container_name))
+    bent_arm_model = pickle.loads(get_pkl("{}/{}/models/bent_arm_models/model".format(exercise_set, exercise_name), container_name))
+    bent_arm_scaler = pickle.loads(get_pkl("{}/{}/models/bent_arm_models/scaler".format(exercise_set, exercise_name), container_name))
+    arm_model = pickle.loads(get_pkl("{}/{}/models/arm_models/model".format(exercise_set, exercise_name), container_name))
+    arm_scaler = pickle.loads(get_pkl("{}/{}/models/arm_models/scaler".format(exercise_set, exercise_name), container_name))
+                      
+    X_leg = feature_vector[['moving_torso_thigh_angles', 'moving_thigh_shank_angles', 'shoulder_ankle_diffs']]
+    X_bent_arm = feature_vector[['stationary_upper_arm_torso_angles', 'stationary_upper_arm_forearm_angles']]
+    X_arm = feature_vector[['moving_upper_arm_torso_angles', 'moving_upper_arm_forearm_angles', 'shoulder_wrist_diffs']]
 
-  X_leg_scaled = leg_scaler.transform(X_leg.values)
-  X_bent_arm_scaled = bent_arm_scaler.transform(X_bent_arm.values)
-  X_arm_scaled = arm_scaler.transform(X_arm.values)
+    X_leg_scaled = leg_scaler.transform(X_leg.values)
+    X_bent_arm_scaled = bent_arm_scaler.transform(X_bent_arm.values)
+    X_arm_scaled = arm_scaler.transform(X_arm.values)
 
-  leg_preds = leg_model.predict(X_leg_scaled)
-  bent_arm_preds = bent_arm_model.predict(X_bent_arm_scaled)
-  arm_preds = arm_model.predict(X_arm_scaled)
+    leg_preds = leg_model.predict(X_leg_scaled)
+    bent_arm_preds = bent_arm_model.predict(X_bent_arm_scaled)
+    arm_preds = arm_model.predict(X_arm_scaled)
 
-  mistake_frame_dict = {
-      "Extended leg too high": [],
-      "Extended leg too low": [],
-      "Bent supporting arm": [],
-      "Extended arm not aligned with shoulder": []
-  }
-  print("leg preds: {}".format(leg_preds))
-  print("held_frames_idxs: {}".format(held_frames_idxs))
+    print("leg preds: {}".format(leg_preds))
+    print("held_frames_idxs: {}".format(held_frames_idxs))
 
-  if np.any(leg_preds == 1):
-    mistakes.append("Extended leg too high")
-    # Take first frame where error is detected
-    extended_leg_too_high_frame_idx = np.where(leg_preds == 1)[0][0]
-    print("extended_leg_too_high_frame_idx: {}".format(extended_leg_too_high_frame_idx))
-    mistake_frame_dict["Extended leg too high"] = movenet_imgs[held_frames_idxs[extended_leg_too_high_frame_idx]]
+    if np.any(leg_preds == 1):
+      mistakes.append("Extended leg too high")
+      # Take first frame where error is detected
+      extended_leg_too_high_frame_idx = np.where(leg_preds == 1)[0][0]
+      print("extended_leg_too_high_frame_idx: {}".format(extended_leg_too_high_frame_idx))
+      mistake_frame_dict["Extended leg too high"] = movenet_imgs[held_frames_idxs[extended_leg_too_high_frame_idx]]
 
-  if np.any(leg_preds == 2):
-    mistakes.append("Extended leg too low")
-    # Take first frame where error is detected
-    extended_leg_too_low_frame_idx = np.where(leg_preds == 2)[0][0]
-    print("extended_leg_too_low_frame_idx: {}".format(extended_leg_too_low_frame_idx))
-    mistake_frame_dict["Extended leg too low"] = movenet_imgs[held_frames_idxs[extended_leg_too_low_frame_idx]]
+    if np.any(leg_preds == 2):
+      mistakes.append("Extended leg too low")
+      # Take first frame where error is detected
+      extended_leg_too_low_frame_idx = np.where(leg_preds == 2)[0][0]
+      print("extended_leg_too_low_frame_idx: {}".format(extended_leg_too_low_frame_idx))
+      mistake_frame_dict["Extended leg too low"] = movenet_imgs[held_frames_idxs[extended_leg_too_low_frame_idx]]
 
-  if np.any(bent_arm_preds == 1):
-    mistakes.append("Bent supporting arm")
-    # Take first frame where error is detected
-    bent_arm_frame_idx = np.where(bent_arm_preds == 1)[0][0]
-    print("bent_arm_frame_idx: {}".format(bent_arm_frame_idx))
-    mistake_frame_dict["Bent supporting arm"] = movenet_imgs[held_frames_idxs[bent_arm_frame_idx]]
+    if np.any(bent_arm_preds == 1):
+      mistakes.append("Bent supporting arm")
+      # Take first frame where error is detected
+      bent_arm_frame_idx = np.where(bent_arm_preds == 1)[0][0]
+      print("bent_arm_frame_idx: {}".format(bent_arm_frame_idx))
+      mistake_frame_dict["Bent supporting arm"] = movenet_imgs[held_frames_idxs[bent_arm_frame_idx]]
 
-  if np.any(arm_preds == 1):
-    mistakes.append("Extended arm not aligned with shoulder")
-    # Take first frame where error is detected
-    arm_frame_idx = np.where(arm_preds == 1)[0][0]
-    print("extended_arm_not_aligned_frame_idx: {}".format(arm_frame_idx))
-    mistake_frame_dict["Extended arm not aligned with shoulder"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
-    
+    if np.any(arm_preds == 1):
+      mistakes.append("Extended arm not aligned with shoulder")
+      # Take first frame where error is detected
+      arm_frame_idx = np.where(arm_preds == 1)[0][0]
+      print("extended_arm_not_aligned_frame_idx: {}".format(arm_frame_idx))
+      mistake_frame_dict["Extended arm not aligned with shoulder"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
+  except:
+    print("Error processing video")
+
   return mistakes, mistake_frame_dict
