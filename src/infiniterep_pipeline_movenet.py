@@ -438,43 +438,6 @@ def perform_subseq_dtw_alt(exemplar_spline, query_spline, num = 10):
 
   return matches
 
-def construct_dataframe(idxs, filtered_dict, offset = 0):
-  # Construct dataframe for correct reps
-  rep_df = pd.DataFrame(filtered_dict)
-
-  rep_dfs = []
-  for n_reps, idx_set in enumerate(idxs):
-    df = rep_df.iloc[idx_set[0]:idx_set[1], :]
-    df['Rep'] = n_reps + offset
-    rep_dfs.append(df)
-  rep_df = pd.concat(rep_dfs)
-
-  return rep_df
-
-def get_rom(rep_df, limb_keys):
-  roms_dict = {}
-  roms = [
-      rep_df.groupby('Rep').agg({f"right_{limb_keys}": np.ptp}).mean(),
-      rep_df.groupby('Rep').agg({f"left_{limb_keys}": np.ptp}).mean()
-  ]
-  for rom in roms:
-    roms_dict[rom.index.values[0]] =  rom.values[0]
-  
-  moving_limb = max(roms_dict, key=roms_dict.get)
-  moving_limb = moving_limb.split('_')[0]
-  
-  return moving_limb
-
-def detect_moving_limbs(rep_df, arm_keys = 'upper_arm_torso_angles', 
-                        leg_keys = 'torso_thigh_angles'):
-  moving_arm = get_rom(rep_df, limb_keys = arm_keys)
-  moving_leg = get_rom(rep_df, limb_keys = leg_keys)
-
-  moving_sides = {"moving_arm": moving_arm, "moving_leg": moving_leg}
-  print(moving_sides)
-  
-  return moving_sides
-
 def rename_angle_columns(rep_df, moving_limbs_dict):
   rename_dict = {}
   for col in rep_df.columns:
@@ -669,62 +632,7 @@ def perform_segmentation_updated(raw_keypoints, raw_img_data, container_name, ex
   idxs = sorted(idxs, key=lambda x: x[0])
 
   return idxs, filtered_angle_dict, query_vectors, query_keypoints, moving_limb_dict
-
-def construct_dataframe(idxs, filtered_dict, offset = 0):
-  # Construct dataframe for correct reps
-  rep_df = pd.DataFrame(filtered_dict)
-
-  rep_dfs = []
-  for n_reps, idx_set in enumerate(idxs):
-    df = rep_df.iloc[idx_set[0]:idx_set[1], :]
-    df['Rep'] = n_reps + offset
-    rep_dfs.append(df)
-  rep_df = pd.concat(rep_dfs)
-
-  return rep_df
   
-# Step 1: detect moving side
-def get_rom(rep_df, limb_keys):
-  roms_dict = {}
-  roms = [
-      rep_df.groupby('Rep').agg({f"right_{limb_keys}": np.ptp}).mean(),
-      rep_df.groupby('Rep').agg({f"left_{limb_keys}": np.ptp}).mean()
-  ]
-  for rom in roms:
-    roms_dict[rom.index.values[0]] =  rom.values[0]
-  
-  moving_limb = max(roms_dict, key=roms_dict.get)
-  moving_limb = moving_limb.split('_')[0]
-  
-  return moving_limb
-
-def detect_moving_limbs(rep_df, arm_keys = 'upper_arm_torso_angles', 
-                        leg_keys = 'torso_thigh_angles'):
-  moving_arm = get_rom(rep_df, limb_keys = arm_keys)
-  moving_leg = get_rom(rep_df, limb_keys = leg_keys)
-
-  moving_sides = {"moving_arm": moving_arm, "moving_leg": moving_leg}
-  print(moving_sides)
-  
-  return moving_sides
-
-def rename_angle_columns(rep_df, moving_limbs_dict):
-  rename_dict = {}
-  for col in rep_df.columns:
-    col_suffix = '_'.join(col.split('_')[1:])
-    # Rename arm columns
-    if "arm" in col.lower() and moving_limbs_dict['moving_arm'] in col.lower():
-      rename_dict[col] = f"moving_{col_suffix}"
-    elif "arm" in col.lower() and moving_limbs_dict['moving_arm'] not in col.lower():
-      rename_dict[col] = f"stationary_{col_suffix}"
-
-    # Rename leg columns
-    elif ("shank" in col.lower() or "thigh" in col.lower()) and moving_limbs_dict['moving_leg'] in col.lower():
-      rename_dict[col] = f"moving_{col_suffix}"
-    elif ("shank" in col.lower() or "thigh" in col.lower()) and moving_limbs_dict['moving_leg'] not in col.lower():
-      rename_dict[col] = f"stationary_{col_suffix}"
-  return rename_dict
-
 def extract_rep_dfs_and_keypts(img_data, angle_dict, vector_dict, 
                                idxs, moving_limbs, query_keypoints):    
   # Check that vectors and angles are aligned
@@ -739,7 +647,7 @@ def extract_rep_dfs_and_keypts(img_data, angle_dict, vector_dict,
     )
   )
   held_rep_dfs, held_interpret_keypts, held_frame_idxs = [], [], []
-  for i in range(10):
+  for i in range(len(idxs)):
     # Extract vector data 
     rep_data = data.iloc[idxs[i][0]:idxs[i][1]] 
     
@@ -793,9 +701,9 @@ def extract_rep_dfs_and_keypts(img_data, angle_dict, vector_dict,
   return pd.concat(held_rep_dfs), held_interpret_keypts, held_frame_idxs
 
 # Feature Extaction functions
-def get_ankle_shoulder_diff(interpret_keypts, moving_limbs):
+def get_ankle_shoulder_diff(interpret_keypts, moving_limbs, n_reps):
   shoulder_ankle_diffs = []
-  for i in range(10):
+  for i in range(n_reps):
     moving_leg = moving_limbs['moving_leg']
 
     moving_ankle_height = 1200 - interpret_keypts[i][KEYPOINT_DICT[f"{moving_leg}_ankle"]][1]
@@ -812,9 +720,9 @@ def get_ankle_shoulder_diff(interpret_keypts, moving_limbs):
 
   return shoulder_ankle_diffs
 
-def get_wrist_shoulder_diff(interpret_keypts, moving_limbs):
+def get_wrist_shoulder_diff(interpret_keypts, moving_limbs, n_reps):
   shoulder_wrist_diffs = []
-  for i in range(10):
+  for i in range(n_reps):
     moving_arm = moving_limbs['moving_arm']
     moving_wrist_height = 1200 - interpret_keypts[i][KEYPOINT_DICT[f"{moving_arm}_wrist"]][1]
 
@@ -831,14 +739,17 @@ def get_wrist_shoulder_diff(interpret_keypts, moving_limbs):
 
 def extract_features(full_held_rep_df, moving_limbs, interpret_keypts):                 
   feature_vector = full_held_rep_df.copy()
+  n_reps = int(full_held_rep_df['Rep'].max()) + 1
   # Extract shoulder ankle and shoulder-wrist differences
   shoulder_ankle_diffs = get_ankle_shoulder_diff(
       interpret_keypts = interpret_keypts, 
-      moving_limbs = moving_limbs
+      moving_limbs = moving_limbs,
+      n_reps = n_reps
   )
   shoulder_wrist_diffs = get_wrist_shoulder_diff(
       interpret_keypts = interpret_keypts, 
-      moving_limbs = moving_limbs
+      moving_limbs = moving_limbs,
+      n_reps = n_reps
   )
   feature_vector['shoulder_ankle_diffs'] = shoulder_ankle_diffs
   feature_vector['shoulder_wrist_diffs'] = shoulder_wrist_diffs
