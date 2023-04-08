@@ -693,7 +693,10 @@ def extract_rep_dfs_and_keypts(img_data, angle_dict, vector_dict,
         height, 
         width
     )
-
+    # Reject reps where we don't see all keypoints (artifacts during start and end of recordings)
+    if keypoint_locs.shape[0] < 17:
+      continue
+    
     held_rep_dfs.append(held_angle_df)
     held_interpret_keypts.append(keypoint_locs)
     held_frame_idxs.append(max_peak_idx)
