@@ -959,10 +959,10 @@ def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, cont
     if trim_idxs is not None:
       movenet_keypts = movenet_keypts[trim_idxs:-trim_idxs]
       movenet_imgs = movenet_imgs[trim_idxs:-trim_idxs]
-      
+
     # Loads the data from keypoints and image frames provided by MoveNet then performs rep segmentation
     # Extracts the held frames, keypoints, and body angles at the held frame for each rep  
-    held_rep_df, held_interpret_keypts, held_frames_idxs, moving_limb_dict, _ = get_held_reps(
+    held_rep_df, held_interpret_keypts, held_frames_idxs, moving_limb_dict, query_vectors, filtered_angle_dict = get_held_reps(
         movenet_keypts, 
         movenet_imgs, 
         show_plots = False, 
