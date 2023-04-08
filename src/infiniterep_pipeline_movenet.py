@@ -760,6 +760,7 @@ def extract_features(full_held_rep_df, moving_limbs, interpret_keypts):
 def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, container_name):
   mistakes = []
   mistake_frame_dict = {}
+  error_flag = False
 
   try:
     # Loads the data from keypoints and image frames provided by MoveNet then performs rep segmentation
@@ -834,5 +835,6 @@ def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, cont
       mistake_frame_dict["Extended arm not aligned with shoulder"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
   except:
     print("Error processing video")
+    error_flag = True
 
-  return mistakes, mistake_frame_dict
+  return mistakes, mistake_frame_dict, error_flag
