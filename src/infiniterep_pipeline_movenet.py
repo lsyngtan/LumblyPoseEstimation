@@ -463,7 +463,7 @@ def rename_angle_columns(rep_df, moving_limbs_dict):
 def get_total_rom(motion_data):
   return np.sum(np.abs(np.gradient(motion_data)))
 
-def get_total_moving_side(filtered_angle_dict):
+def get_total_moving_side_angles(filtered_angle_dict):
   sides = ['right', 'left']
   right_arm_angles = filtered_angle_dict['right_upper_arm_torso_angles']
   left_arm_angles = filtered_angle_dict['left_upper_arm_torso_angles']
@@ -482,6 +482,27 @@ def get_total_moving_side(filtered_angle_dict):
   print(moving_limb_dict) 
 
   return moving_limb_dict 
+
+def get_total_moving_side_vectors(query_vectors):
+  sides = ['right', 'left']
+  right_arm_angles = query_vectors['right_forearm_vecs'][:, 1]
+  left_arm_angles = query_vectors['left_forearm_vecs'][:, 1]
+  right_arm_rom, left_arm_rom = get_total_rom(right_arm_angles), get_total_rom(left_arm_angles)
+  moving_arm = np.argmax([right_arm_rom, left_arm_rom])
+
+  right_leg_angles = query_vectors['right_thigh_vecs'][:, 1]
+  left_leg_angles = query_vectors['left_thigh_vecs'][:, 1]
+  right_leg_rom, left_leg_rom = get_total_rom(right_leg_angles), get_total_rom(left_leg_angles)
+  moving_leg = np.argmax([right_leg_rom, left_leg_rom])
+
+  moving_limb_dict = {
+      "moving_arm": sides[moving_arm], 
+      "moving_leg": sides[moving_leg]
+  }
+  print(moving_limb_dict) 
+
+  return moving_limb_dict 
+
 
 def _keypoints_and_edges_for_display(keypoints_with_scores,
                                      height,
@@ -781,14 +802,16 @@ def draw_prediction_on_image(
   return image_from_plot
 
 def get_held_reps(raw_keypoints, raw_img_data, show_plots = False, prominence = None): 
-  """
-  Extracts "held" frames and keypoints via peak detection
-  """
   # Preprocess USER video
   query_vectors, query_keypoints, filtered_angle_dict = preprocess_pose(raw_keypoints)
 
   # Detect moving side
-  moving_limb_dict = get_total_moving_side(filtered_angle_dict)
+  moving_limb_dict = get_total_moving_side_angles(filtered_angle_dict)
+  # moving_limb_dict = get_total_moving_side_vectors(query_vectors)
+
+  if moving_limb_dict['moving_leg']  == moving_limb_dict['moving_arm']:
+    print("Bird Dog form invalid; moving arm and leg are the same")
+    return
 
   # Detect head orientation
   head_orientation, interp_keypts =  get_head_orientation(
@@ -867,7 +890,8 @@ def get_held_reps(raw_keypoints, raw_img_data, show_plots = False, prominence = 
     held_rep_dfs.append(held_angle_df)
     held_interpret_keypts.append(keypoint_locs)
 
-  return pd.concat(held_rep_dfs), held_interpret_keypts, max_peak_idxs, moving_limb_dict, query_vectors 
+  return pd.concat(held_rep_dfs), held_interpret_keypts, max_peak_idxs, moving_limb_dict, query_vectors, filtered_angle_dict
+
 # Feature Extaction functions
 def get_ankle_shoulder_diff(interpret_keypts, moving_limbs, n_reps):
   shoulder_ankle_diffs = []
@@ -925,12 +949,17 @@ def extract_features(full_held_rep_df, moving_limbs, interpret_keypts):
   return feature_vector.set_index('Rep')
 
 # Output from MoveNet goes here:
-def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, container_name):
+def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, container_name, trim_idxs = 60):
   mistakes = []
   mistake_frame_dict = {}
   error_flag = False
 
   try:
+    # Trim ends of video
+    if trim_idxs is not None:
+      movenet_keypts = movenet_keypts[trim_idxs:-trim_idxs]
+      movenet_imgs = movenet_imgs[trim_idxs:-trim_idxs]
+      
     # Loads the data from keypoints and image frames provided by MoveNet then performs rep segmentation
     # Extracts the held frames, keypoints, and body angles at the held frame for each rep  
     held_rep_df, held_interpret_keypts, held_frames_idxs, moving_limb_dict, _ = get_held_reps(
