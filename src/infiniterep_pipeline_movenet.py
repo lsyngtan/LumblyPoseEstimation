@@ -16,6 +16,11 @@ import libfmp.b
 import libfmp.c4
 import libfmp.c7
 
+import cv2
+import matplotlib.patches as patches
+from matplotlib.collections import LineCollection
+import matplotlib.pyplot as plt
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
 from sklearn.tree import DecisionTreeClassifier
@@ -508,9 +513,10 @@ def _keypoints_and_edges_for_display(keypoints_with_scores,
     kpts_scores = keypoints_with_scores[0, idx, :, 2]
     kpts_absolute_xy = np.stack(
         [width * np.array(kpts_x), height * np.array(kpts_y)], axis=-1)
-    kpts_above_thresh_absolute = kpts_absolute_xy[
-        kpts_scores > keypoint_threshold, :]
-    keypoints_all.append(kpts_above_thresh_absolute)
+    # kpts_above_thresh_absolute = kpts_absolute_xy[
+    #     kpts_scores > keypoint_threshold, :]
+    # keypoints_all.append(kpts_above_thresh_absolute)
+    keypoints_all.append(kpts_absolute_xy)
 
     for edge_pair, color in KEYPOINT_EDGE_INDS_TO_COLOR.items():
       if (kpts_scores[edge_pair[0]] > keypoint_threshold and
@@ -703,6 +709,165 @@ def extract_rep_dfs_and_keypts(img_data, angle_dict, vector_dict,
 
   return pd.concat(held_rep_dfs), held_interpret_keypts, held_frame_idxs
 
+def draw_prediction_on_image(
+    image, keypoints_with_scores, crop_region=None, close_figure=False,
+    output_image_height=None):
+  """Draws the keypoint predictions on image.
+
+  Args:
+    image: A numpy array with shape [height, width, channel] representing the
+      pixel values of the input image.
+    keypoints_with_scores: A numpy array with shape [1, 1, 17, 3] representing
+      the keypoint coordinates and scores returned from the MoveNet model.
+    crop_region: A dictionary that defines the coordinates of the bounding box
+      of the crop region in normalized coordinates (see the init_crop_region
+      function below for more detail). If provided, this function will also
+      draw the bounding box on the image.
+    output_image_height: An integer indicating the height of the output image.
+      Note that the image aspect ratio will be the same as the input image.
+
+  Returns:
+    A numpy array with shape [out_height, out_width, channel] representing the
+    image overlaid with keypoint predictions.
+  """
+  height, width, channel = image.shape
+  aspect_ratio = float(width) / height
+  fig, ax = plt.subplots(figsize=(12 * aspect_ratio, 12))
+  # To remove the huge white borders
+  fig.tight_layout(pad=0)
+  ax.margins(0)
+  ax.set_yticklabels([])
+  ax.set_xticklabels([])
+  plt.axis('off')
+
+  im = ax.imshow(image)
+  line_segments = LineCollection([], linewidths=(4), linestyle='solid')
+  ax.add_collection(line_segments)
+  # Turn off tick labels
+  scat = ax.scatter([], [], s=60, color='#FF1493', zorder=3)
+
+  (keypoint_locs, keypoint_edges,
+   edge_colors) = _keypoints_and_edges_for_display(
+       keypoints_with_scores, height, width)
+
+  line_segments.set_segments(keypoint_edges)
+  line_segments.set_color(edge_colors)
+  if keypoint_edges.shape[0]:
+    line_segments.set_segments(keypoint_edges)
+    line_segments.set_color(edge_colors)
+  if keypoint_locs.shape[0]:
+    scat.set_offsets(keypoint_locs)
+
+  if crop_region is not None:
+    xmin = max(crop_region['x_min'] * width, 0.0)
+    ymin = max(crop_region['y_min'] * height, 0.0)
+    rec_width = min(crop_region['x_max'], 0.99) * width - xmin
+    rec_height = min(crop_region['y_max'], 0.99) * height - ymin
+    rect = patches.Rectangle(
+        (xmin,ymin),rec_width,rec_height,
+        linewidth=1,edgecolor='b',facecolor='none')
+    ax.add_patch(rect)
+
+  fig.canvas.draw()
+  image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+  image_from_plot = image_from_plot.reshape(
+      fig.canvas.get_width_height()[::-1] + (3,))
+  plt.close(fig)
+  if output_image_height is not None:
+    output_image_width = int(output_image_height / height * width)
+    image_from_plot = cv2.resize(
+        image_from_plot, dsize=(output_image_width, output_image_height),
+         interpolation=cv2.INTER_CUBIC)
+  return image_from_plot
+
+def get_held_reps(raw_keypoints, raw_img_data, show_plots = False, prominence = None): 
+  """
+  Extracts "held" frames and keypoints via peak detection
+  """
+  # Preprocess USER video
+  query_vectors, query_keypoints, filtered_angle_dict = preprocess_pose(raw_keypoints)
+
+  # Detect moving side
+  moving_limb_dict = get_total_moving_side(filtered_angle_dict)
+
+  # Detect head orientation
+  head_orientation, interp_keypts =  get_head_orientation(
+      raw_img_data, 
+      query_keypoints = query_keypoints
+  )
+  print("head_orientation:", head_orientation)
+  if head_orientation == "Not all keypoints detected":
+    return
+
+  # Check that vectors and angles are aligned
+  vector_dict_lengths = [len(query_vectors[key]) for key in query_vectors.keys()]
+  angle_dict_lengths = [len(filtered_angle_dict[key]) for key in filtered_angle_dict.keys()]
+  assert np.unique(vector_dict_lengths).shape[0] == 1 and np.unique(angle_dict_lengths).shape[0] == 1 
+  assert np.unique(vector_dict_lengths)[0]  == np.unique(angle_dict_lengths)[0]
+
+  data = pd.Series(
+    zscore(
+        query_vectors[f"{moving_limb_dict['moving_leg']}_thigh_vecs"][:, 1]
+    )
+  )
+  # Apply Gaussian filter to reduce noise prior to peak finding
+  smoothed_rep_data = ndimage.gaussian_filter1d(data, 3)
+  rep_data = pd.Series(smoothed_rep_data, index = data.index)
+
+  # Peak-finding
+  if head_orientation == 'left': # convex, therefore look for a trough
+    peaks = find_peaks(-rep_data, distance = 30, prominence = prominence)[0]
+    max_peak_idxs = rep_data[rep_data.index[peaks]].nsmallest(10).index.to_list()
+  elif head_orientation == 'right': # concave, therefore look for a peak
+    peaks = find_peaks(rep_data, distance = 30, prominence = prominence)[0]
+    max_peak_idxs = rep_data[rep_data.index[peaks]].nlargest(10).index.to_list()
+  max_peak_idxs = sorted(max_peak_idxs)
+  relevant_frames = raw_img_data[max_peak_idxs]
+
+  held_rep_dfs, held_interpret_keypts = [], []
+  for i, relevant_frame in enumerate(relevant_frames):
+    idx = max_peak_idxs[i]
+    # Extract vector data 
+    rep_data = data.iloc[idx] 
+
+    # Get body angles at the held frame
+    held_angle_df = pd.DataFrame(filtered_angle_dict).loc[idx]
+
+    held_angle_df['Rep'] = i
+    held_angle_df = pd.DataFrame(held_angle_df).T
+
+    # Rename based on moving/stationary limbs
+    rename_dict = rename_angle_columns(held_angle_df, moving_limb_dict)
+    held_angle_df = held_angle_df.rename(columns = rename_dict)
+
+    # Get keypoints at "held" frame 
+    processed_keypoints = np.expand_dims(
+      np.expand_dims(
+          query_keypoints[idx, :17, :], 
+          axis = 0
+      ), 
+      axis = 0
+    )
+    height, width, channel = relevant_frame.shape  
+    keypoint_locs, _ ,_ = _keypoints_and_edges_for_display(
+        processed_keypoints, 
+        height, 
+        width
+    )
+    
+    if show_plots:
+      image_plot = draw_prediction_on_image(relevant_frame, processed_keypoints)
+      plt.figure()
+      plt.imshow(image_plot)
+      plt.title(f"Rep {i}")
+    # # Reject reps where we don't see all keypoints (artifacts during start and end of recordings)
+    # if keypoint_locs.shape[0] < 17:
+    #   continue
+
+    held_rep_dfs.append(held_angle_df)
+    held_interpret_keypts.append(keypoint_locs)
+
+  return pd.concat(held_rep_dfs), held_interpret_keypts, max_peak_idxs, moving_limb_dict, query_vectors 
 # Feature Extaction functions
 def get_ankle_shoulder_diff(interpret_keypts, moving_limbs, n_reps):
   shoulder_ankle_diffs = []
@@ -767,21 +932,12 @@ def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, cont
 
   try:
     # Loads the data from keypoints and image frames provided by MoveNet then performs rep segmentation
-    rep_idxs, filtered_angle_dict, query_vectors, query_keypoints, moving_limb_dict = perform_segmentation_updated(
-        movenet_keypts, 
-        movenet_imgs,
-        container_name,
-        exercise_set,
-        exercise_name
-    )
     # Extracts the held frames, keypoints, and body angles at the held frame for each rep  
-    held_rep_df, held_interpret_keypts, held_frames_idxs = extract_rep_dfs_and_keypts(
-        img_data = movenet_imgs, 
-        angle_dict = filtered_angle_dict, 
-        vector_dict = query_vectors, 
-        idxs = rep_idxs, 
-        moving_limbs = moving_limb_dict, 
-        query_keypoints = query_keypoints
+    held_rep_df, held_interpret_keypts, held_frames_idxs, moving_limb_dict, _ = get_held_reps(
+        movenet_keypts, 
+        movenet_imgs, 
+        show_plots = False, 
+        prominence = 0.8
     )
     # Extract feature vector
     feature_vector = extract_features(held_rep_df, moving_limb_dict, held_interpret_keypts)
