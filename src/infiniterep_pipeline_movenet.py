@@ -839,10 +839,10 @@ def get_held_reps(raw_keypoints, raw_img_data, show_plots = False, prominence = 
 
   # Peak-finding
   if head_orientation == 'left': # convex, therefore look for a trough
-    peaks = find_peaks(-rep_data, distance = 30, prominence = prominence)[0]
+    peaks = find_peaks(-rep_data, distance = 30, prominence = prominence, height = prominence)[0]
     max_peak_idxs = rep_data[rep_data.index[peaks]].nsmallest(10).index.to_list()
   elif head_orientation == 'right': # concave, therefore look for a peak
-    peaks = find_peaks(rep_data, distance = 30, prominence = prominence)[0]
+    peaks = find_peaks(rep_data, distance = 30, prominence = prominence, height = prominence)[0]
     max_peak_idxs = rep_data[rep_data.index[peaks]].nlargest(10).index.to_list()
   max_peak_idxs = sorted(max_peak_idxs)
   relevant_frames = raw_img_data[max_peak_idxs]
@@ -1016,11 +1016,16 @@ def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, cont
       mistake_frame_dict["Bent supporting arm"] = movenet_imgs[held_frames_idxs[bent_arm_frame_idx]]
 
     if np.any(arm_preds == 1):
-      mistakes.append("Extended arm not aligned with shoulder")
+      mistakes.append("Extended arm too high")
       # Take first frame where error is detected
       arm_frame_idx = np.where(arm_preds == 1)[0][0]
-      print("extended_arm_not_aligned_frame_idx: {}".format(arm_frame_idx))
-      mistake_frame_dict["Extended arm not aligned with shoulder"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
+      mistake_frame_dict["Extended arm  too high"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
+  
+    if np.any(arm_preds == 2):
+      mistakes.append("Extended arm too low")
+      # Take first frame where error is detected
+      arm_frame_idx = np.where(arm_preds == 2)[0][0]
+      mistake_frame_dict["Extended arm too low"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
   except:
     print("Error processing video")
     error_flag = True
