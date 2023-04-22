@@ -995,18 +995,18 @@ def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, cont
     print("held_frames_idxs: {}".format(held_frames_idxs))
 
     if np.any(leg_preds == 1):
-      mistakes.append("Extended leg too high")
+      mistakes.append("Raised leg too high")
       # Take first frame where error is detected
       extended_leg_too_high_frame_idx = np.where(leg_preds == 1)[0][0]
       print("extended_leg_too_high_frame_idx: {}".format(extended_leg_too_high_frame_idx))
-      mistake_frame_dict["Extended leg too high"] = movenet_imgs[held_frames_idxs[extended_leg_too_high_frame_idx]]
+      mistake_frame_dict["Raised leg too high"] = movenet_imgs[held_frames_idxs[extended_leg_too_high_frame_idx]]
 
     if np.any(leg_preds == 2):
-      mistakes.append("Extended leg too low")
+      mistakes.append("Raised leg too low")
       # Take first frame where error is detected
       extended_leg_too_low_frame_idx = np.where(leg_preds == 2)[0][0]
       print("extended_leg_too_low_frame_idx: {}".format(extended_leg_too_low_frame_idx))
-      mistake_frame_dict["Extended leg too low"] = movenet_imgs[held_frames_idxs[extended_leg_too_low_frame_idx]]
+      mistake_frame_dict["Raised leg too low"] = movenet_imgs[held_frames_idxs[extended_leg_too_low_frame_idx]]
 
     if np.any(bent_arm_preds == 1):
       mistakes.append("Bent supporting arm")
@@ -1016,16 +1016,16 @@ def get_mistakes(movenet_keypts, movenet_imgs, exercise_set, exercise_name, cont
       mistake_frame_dict["Bent supporting arm"] = movenet_imgs[held_frames_idxs[bent_arm_frame_idx]]
 
     if np.any(arm_preds == 1):
-      mistakes.append("Extended arm too high")
+      mistakes.append("Raised arm too high")
       # Take first frame where error is detected
       arm_frame_idx = np.where(arm_preds == 1)[0][0]
-      mistake_frame_dict["Extended arm  too high"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
+      mistake_frame_dict["Raised arm too high"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
   
     if np.any(arm_preds == 2):
-      mistakes.append("Extended arm too low")
+      mistakes.append("Raised arm too low")
       # Take first frame where error is detected
       arm_frame_idx = np.where(arm_preds == 2)[0][0]
-      mistake_frame_dict["Extended arm too low"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
+      mistake_frame_dict["Raised arm too low"] = movenet_imgs[held_frames_idxs[arm_frame_idx]]
   except:
     print("Error processing video")
     error_flag = True
